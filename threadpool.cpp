@@ -45,7 +45,7 @@ typedef struct {
 void* adjust_thread(void* threadpool);
 
 bool is_thread_alive(pthread_t tid);
-bool threadpool_free(threadpool_t* pool);
+int threadpool_free(threadpool_t* pool);
 void* threadpool_thread(void* threadpool);
 
 threadpool_t* create_threadpool(int min_thr_num, int max_thr_num, int queue_max_size){
@@ -164,7 +164,89 @@ void* threadpool_thread(void* threadpool){
 }
 
 void * adjust_thread(void* threadpool){
+    int i;
+    auto* pool = (threadpool_t *)threadpool;
+    while (!pool->shutdown){
+        // Timer
+        sleep(DEFAULT_TIME);
+
+        pthread_mutex_lock(&pool->lock);
+        int queue_size =  pool->queue_size;
+        int live_thr_num = pool->live_thr_num;
+        pthread_mutex_unlock(&pool->lock);
+
+        pthread_mutex_lock(&pool->thread_counter);
+        int busy_thr_num = pool->busy_thr_num;
+        pthread_mutex_unlock(&pool->thread_counter);
+
+        if(queue_size >= MIN_WAIT_TASK_NUM && live_thr_num < pool->max_thr_num){
+            pthread_mutex_lock(&pool->lock);
+            int add = 0;
+
+            for(i = 0; i < pool->max_thr_num && add < DEFAULT_THREAD_VARY
+                        && pool->live_thr_num < pool->max_thr_num; ++i){
+                if(pool->threads[i] == 0 || !is_thread_alive(pool->threads[i])){
+                    pthread_create(&pool->threads[i], nullptr, threadpool_thread, (void *)pool);
+                    ++add;
+                    ++pool->live_thr_num;
+                }
+            }
+            pthread_mutex_unlock(&pool->lock);
+        }
+
+        if((busy_thr_num * 2) < live_thr_num && live_thr_num > pool->min_thr_num){
+            pthread_mutex_lock(&pool->lock);
+            pool->wait_exit_thr_num = DEFAULT_THREAD_VARY;
+            pthread_mutex_unlock(&pool->lock);
+
+            for(i = 0; i < DEFAULT_THREAD_VARY; ++i){
+                pthread_cond_signal(&pool->queue_not_empty);
+            }
+        }
+    }
     return nullptr;
+}
+
+int threadpool_destroy(threadpool_t *pool){
+    int i;
+    if (pool == nullptr) return -1;
+    pool->shutdown = true;
+
+    pthread_join(pool->adjust_tid, nullptr);
+
+    for(i = 0; i < pool->live_thr_num; ++i){
+        pthread_cond_broadcast(&pool->queue_not_empty);
+    }
+
+    for(i = 0; i < pool->live_thr_num; ++i){
+        pthread_join(pool->threads[i], nullptr);
+    }
+
+    threadpool_free(pool);
+
+    return 0;
+}
+
+int threadpool_free(threadpool_t* pool){
+    if (pool == nullptr) return -1;
+    if(pool->task_queue) delete [] (pool->task_queue);
+    if(pool->threads){
+        delete [] (pool->threads);
+        pthread_mutex_lock(&pool->lock);
+        pthread_mutex_destroy(&pool->lock);
+        pthread_mutex_lock(&pool->thread_counter);
+        pthread_mutex_destroy(&pool->thread_counter);
+        pthread_cond_destroy(&pool->queue_not_empty);
+        pthread_cond_destroy(&pool->queue_not_full);
+    }
+    delete pool; pool = nullptr;
+
+    return 0;
+}
+
+bool is_thread_alive(pthread_t tid){
+    int kill_rc = pthread_kill(tid, 0);
+    return kill_rc != ESRCH;
 }
 
 // Add task
@@ -172,8 +254,29 @@ int threadpool_add(threadpool_t* pool, void* (*function)(void * arg), void* arg)
     pthread_mutex_lock(&pool->lock);
 
     while((pool->queue_size == pool->queue_max_size) && (!pool->shutdown)){
-
+        pthread_cond_wait(&pool->queue_not_full, &pool->lock);
     }
+
+    if(pool->shutdown){
+        pthread_mutex_unlock(&pool->lock);
+    }
+
+    // Free up the target element of the task queue
+    if(pool->task_queue[pool->queue_rear].arg != nullptr){
+        free(pool->task_queue[pool->queue_rear].arg);
+        pool->task_queue[pool->queue_rear].arg = nullptr;
+    }
+
+    // Append the new task to the rear of the circular queue
+    pool->task_queue[pool->queue_rear].function = function;
+    pool->task_queue[pool->queue_rear].arg = arg;
+    pool->queue_rear = (pool->queue_rear + 1) % pool->queue_max_size;
+    ++pool->queue_size;
+
+    pthread_cond_signal(&pool->queue_not_empty);
+    pthread_mutex_unlock(&pool->lock);
+
+    return 0;
 }
 
 int main() {
