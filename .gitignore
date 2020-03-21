@@ -1,0 +1,52 @@
+# MacOS General
+.DS_Store?
+.AppleDouble
+.LSOverride
+*.DS_Store
+
+# Windows cache
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Clion
+/CMakeFiles/
+/cmake-build-debug/
+
+# Executables
+*.exe
+*.out
+*.app
+*.txt
+.idea
+
+# Test File
