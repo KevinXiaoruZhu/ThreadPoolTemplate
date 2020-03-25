@@ -1,51 +1,5 @@
-#include <iostream>
-#include <cstdlib>
-#include <pthread.h>
-#include <unistd.h>
-#include <cassert>
-#include <cstring>
-#include <csignal>
-#include <cerrno>
+
 #include "threadpool.h"
-
-const int DEFAULT_TIME = 10; // check status of the pool every 10 seconds
-const int MIN_WAIT_TASK_NUM = 10; //
-const int DEFAULT_THREAD_VARY = 10;
-
-typedef struct {
-    void* (*function) (void *);
-    void* arg;
-} threadpool_task_t;
-
-// thread pool descriptor
-typedef struct {
-    pthread_mutex_t lock;
-    pthread_mutex_t thread_counter;
-    pthread_cond_t queue_not_full;
-    pthread_cond_t queue_not_empty;
-
-    pthread_t* threads;
-    pthread_t adjust_tid;
-    threadpool_task_t* task_queue;
-
-    int min_thr_num;
-    int max_thr_num;
-    int live_thr_num;
-    int busy_thr_num;
-    int wait_exit_thr_num;
-
-    int queue_front;
-    int queue_rear;
-    int queue_size;
-    int queue_max_size;
-
-    bool shutdown;
-} threadpool_t;
-
-void* adjust_thread(void* threadpool);
-bool is_thread_alive(pthread_t tid);
-int threadpool_free(threadpool_t* pool);
-void* threadpool_thread(void* threadpool);
 
 threadpool_t* create_threadpool(int min_thr_num, int max_thr_num, int queue_max_size){
     int i;
@@ -162,7 +116,7 @@ void* threadpool_thread(void* threadpool){
     pthread_exit(nullptr);
 }
 
-void * adjust_thread(void* threadpool){
+void* adjust_thread(void* threadpool){
     int i;
     auto* pool = (threadpool_t *)threadpool;
     while (!pool->shutdown){
@@ -278,6 +232,26 @@ int threadpool_add(threadpool_t* pool, void* (*function)(void * arg), void* arg)
     return 0;
 }
 
+
+int threadpool_all_threadnum(threadpool_t *pool)
+{
+    int all_threadnum = -1;
+    pthread_mutex_lock(&(pool->lock));
+    all_threadnum = pool->live_thr_num;
+    pthread_mutex_unlock(&(pool->lock));
+    return all_threadnum;
+}
+
+int threadpool_busy_threadnum(threadpool_t *pool)
+{
+    int busy_threadnum = -1;
+    pthread_mutex_lock(&(pool->thread_counter));
+    busy_threadnum = pool->busy_thr_num;
+    pthread_mutex_unlock(&(pool->thread_counter));
+    return busy_threadnum;
+}
+
+// Test instance
 void* process(void *arg)
 {
     printf("thread 0x %lx working on task %d\n ", (unsigned long)pthread_self(), *(int *)arg);
