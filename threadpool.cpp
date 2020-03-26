@@ -1,69 +1,75 @@
 
 #include "threadpool.h"
 
-threadpool_t* create_threadpool(int min_thr_num, int max_thr_num, int queue_max_size){
+threadpool_descriptor* create_threadpool(int min_thr_num, int max_thr_num, int queue_max_size){
     int i;
-    threadpool_t* pool = nullptr;
-    do{
-        if((pool = new threadpool_t) == nullptr){
-            std::cout << "Failed to create thread pool." << std::endl;
-            break;
-        }
-        pool->max_thr_num = max_thr_num;
-        pool->min_thr_num = min_thr_num;
-        pool->queue_max_size = queue_max_size;
-        pool->queue_size = 0;
-        pool->queue_front = 0;
-        pool->queue_rear = 0;
-        pool->shutdown = false;
-        pool->live_thr_num = 0;
-        pool->busy_thr_num = 0;
-        pool->wait_exit_thr_num = 0;
+    threadpool_descriptor* pool = nullptr;
 
-        if((pool->threads = new pthread_t[max_thr_num]) == nullptr){
-            std::cout << "Failed to malloc space for threads." << std::endl;
-            break;
-        }
+    if((pool = new threadpool_descriptor) == nullptr){
+        std::cout << "Failed to create thread pool." << std::endl;
+        free_threadpool(pool);
+        return nullptr;
+    }
+    pool->max_thr_num = max_thr_num;
+    pool->min_thr_num = min_thr_num;
+    pool->queue_max_size = queue_max_size;
+    pool->queue_size = 0;
+    pool->queue_front = 0;
+    pool->queue_rear = 0;
+    pool->shutdown = false;
+    pool->live_thr_num = 0;
+    pool->busy_thr_num = 0;
+    pool->wait_exit_thr_num = 0;
 
-        if((pool->task_queue = new threadpool_task_t[queue_max_size]) == nullptr){
-            std::cout << "Failed to malloc space for task queue." << std::endl;
-            break;
-        }
+    if((pool->threads = new pthread_t[max_thr_num]) == nullptr){
+        std::cout << "Failed to malloc space for threads." << std::endl;
+        free_threadpool(pool);
+        return nullptr;
+    }
 
-        if(!pthread_mutex_init(&pool->lock, nullptr)
-            || !pthread_mutex_init(&pool->thread_counter, nullptr)
-            || !pthread_cond_init(&pool->queue_not_full, nullptr)
-            || !pthread_cond_init(&pool->queue_not_empty, nullptr)){
-            std::cout << "Failed to initialize locks or conds." << std::endl;
-            break;
-        }
+    if((pool->task_queue = new threadpool_task_t[queue_max_size]) == nullptr){
+        std::cout << "Failed to malloc space for task queue." << std::endl;
+        free_threadpool(pool);
+        return nullptr;
+    }
 
-        for(i = 0; i < min_thr_num; ++i){
-            pthread_create(&(pool->threads[i]), nullptr, threadpool_thread, (void *)pool);
-            std::cout << "Starts running a new tread." << std::endl;
-        }
-        pthread_create(&(pool->adjust_tid), nullptr, adjust_thread, (void *)pool);
+    if(!pthread_mutex_init(&pool->lock, nullptr)
+        || !pthread_mutex_init(&pool->thread_counter, nullptr)
+        || !pthread_cond_init(&pool->queue_not_full, nullptr)
+        || !pthread_cond_init(&pool->queue_not_empty, nullptr)){
+        std::cout << "Failed to initialize locks or conds." << std::endl;
+        free_threadpool(pool);
+        return nullptr;
+    }
 
-        return pool;
+    for(i = 0; i < min_thr_num; ++i){
+        pthread_create(&(pool->threads[i]), nullptr, working_thread, (void *) pool);
+        std::cout << "Starts running a new tread." << std::endl;
+    }
 
-    } while(false);
+    pthread_create(&(pool->adjust_tid), nullptr, managing_thread, (void *) pool);
 
-    threadpool_free(pool);
+    return pool;
 
-    return nullptr;
 }
 
-void* threadpool_thread(void* threadpool){
-    auto* pool = (threadpool_t *)threadpool;
+// Basic task for every single thread in the pool
+void* working_thread(void* threadpool){
+    auto* pool = (threadpool_descriptor *)threadpool;
     threadpool_task_t task{};
 
     while(true){
         pthread_mutex_lock(&pool->lock);
 
+        // If the queue size is 0, wait
         while((pool->queue_size == 0) && (!pool->shutdown)){
             std::cout << "Thread " << pthread_self() << " is waiting..." << std::endl;
+
+            // Wait for the releasing signal of the conditional lock of the adding_task action
+            // or the exit commands from the management thread
             pthread_cond_wait(&pool->queue_not_empty, &pool->lock);
 
+            // Current thread should exit when the exit waiting thread number > 0
             if(pool->wait_exit_thr_num > 0){
                 --pool->wait_exit_thr_num;
 
@@ -77,6 +83,7 @@ void* threadpool_thread(void* threadpool){
             }
         }
 
+        // Check if the thread pool will be shutdown
         if(pool->shutdown){
             pthread_mutex_unlock(&pool->lock);
             std::cout << "Thread " << pthread_self() << " is existing." << std::endl;
@@ -116,13 +123,18 @@ void* threadpool_thread(void* threadpool){
     pthread_exit(nullptr);
 }
 
-void* adjust_thread(void* threadpool){
+// For managing purpose, dynamically adjusting the total thread number according to the current busy level of the pool
+// An independent thread
+void* managing_thread(void* threadpool){
     int i;
-    auto* pool = (threadpool_t *)threadpool;
+    auto* pool = (threadpool_descriptor *)threadpool;
+
     while (!pool->shutdown){
-        // Timer
+
+        // Timer: check the status of the thread pool every 10 seconds
         sleep(DEFAULT_TIME);
 
+        // Get status info from the thread pool
         pthread_mutex_lock(&pool->lock);
         int queue_size =  pool->queue_size;
         int live_thr_num = pool->live_thr_num;
@@ -132,14 +144,15 @@ void* adjust_thread(void* threadpool){
         int busy_thr_num = pool->busy_thr_num;
         pthread_mutex_unlock(&pool->thread_counter);
 
+        // If it is busy, create new threads for the thread pool
         if(queue_size >= MIN_WAIT_TASK_NUM && live_thr_num < pool->max_thr_num){
             pthread_mutex_lock(&pool->lock);
             int add = 0;
 
-            for(i = 0; i < pool->max_thr_num && add < DEFAULT_THREAD_VARY
+            for(i = 0; i < pool->max_thr_num && add < DEFAULT_THREAD_CHANGE_STEP
                         && pool->live_thr_num < pool->max_thr_num; ++i){
                 if(pool->threads[i] == 0 || !is_thread_alive(pool->threads[i])){
-                    pthread_create(&pool->threads[i], nullptr, threadpool_thread, (void *)pool);
+                    pthread_create(&pool->threads[i], nullptr, working_thread, (void *) pool);
                     ++add;
                     ++pool->live_thr_num;
                 }
@@ -147,20 +160,23 @@ void* adjust_thread(void* threadpool){
             pthread_mutex_unlock(&pool->lock);
         }
 
+        // If there are too many idle threads, destroy some of them
         if((busy_thr_num * 2) < live_thr_num && live_thr_num > pool->min_thr_num){
             pthread_mutex_lock(&pool->lock);
-            pool->wait_exit_thr_num = DEFAULT_THREAD_VARY;
+            pool->wait_exit_thr_num = DEFAULT_THREAD_CHANGE_STEP;
             pthread_mutex_unlock(&pool->lock);
 
-            for(i = 0; i < DEFAULT_THREAD_VARY; ++i){
+            for(i = 0; i < DEFAULT_THREAD_CHANGE_STEP; ++i){
                 pthread_cond_signal(&pool->queue_not_empty);
             }
         }
     }
+
     return nullptr;
 }
 
-int threadpool_destroy(threadpool_t *pool){
+// Destroy the whole thread pool
+int destroy_threadpool(threadpool_descriptor *pool){
     int i;
     if (pool == nullptr) return -1;
     pool->shutdown = true;
@@ -175,12 +191,13 @@ int threadpool_destroy(threadpool_t *pool){
         pthread_join(pool->threads[i], nullptr);
     }
 
-    threadpool_free(pool);
+    free_threadpool(pool);
 
     return 0;
 }
 
-int threadpool_free(threadpool_t* pool){
+// Release the space for the whole thread pool
+int free_threadpool(threadpool_descriptor* pool){
     if (pool == nullptr) return -1;
     if(pool->task_queue) delete [] (pool->task_queue);
     if(pool->threads){
@@ -197,19 +214,23 @@ int threadpool_free(threadpool_t* pool){
     return 0;
 }
 
+// Check if the target thread still works
 bool is_thread_alive(pthread_t tid){
     int kill_rc = pthread_kill(tid, 0);
     return kill_rc != ESRCH;
 }
 
-// Add task
-int threadpool_add(threadpool_t* pool, void* (*function)(void * arg), void* arg){
+// Add a real task into the working queue from which the threads will get tasks
+int threadpool_add_task(threadpool_descriptor* pool, void* (*function)(void * arg), void* arg){
+
     pthread_mutex_lock(&pool->lock);
 
+    // Wait for the signal of the queue_not_full if the queue size reaches the max
     while((pool->queue_size == pool->queue_max_size) && (!pool->shutdown)){
         pthread_cond_wait(&pool->queue_not_full, &pool->lock);
     }
 
+    // Check if the thread pool is going to be shutdown
     if(pool->shutdown){
         pthread_mutex_unlock(&pool->lock);
     }
@@ -226,6 +247,7 @@ int threadpool_add(threadpool_t* pool, void* (*function)(void * arg), void* arg)
     pool->queue_rear = (pool->queue_rear + 1) % pool->queue_max_size;
     ++pool->queue_size;
 
+    // Release the locks
     pthread_cond_signal(&pool->queue_not_empty);
     pthread_mutex_unlock(&pool->lock);
 
@@ -233,7 +255,7 @@ int threadpool_add(threadpool_t* pool, void* (*function)(void * arg), void* arg)
 }
 
 
-int threadpool_all_threadnum(threadpool_t *pool)
+int threadpool_all_threadnum(threadpool_descriptor *pool)
 {
     int all_threadnum = -1;
     pthread_mutex_lock(&(pool->lock));
@@ -242,7 +264,7 @@ int threadpool_all_threadnum(threadpool_t *pool)
     return all_threadnum;
 }
 
-int threadpool_busy_threadnum(threadpool_t *pool)
+int threadpool_busy_threadnum(threadpool_descriptor *pool)
 {
     int busy_threadnum = -1;
     pthread_mutex_lock(&(pool->thread_counter));
@@ -252,7 +274,7 @@ int threadpool_busy_threadnum(threadpool_t *pool)
 }
 
 // Test instance
-void* process(void *arg)
+void* test_process(void *arg)
 {
     printf("thread 0x %lx working on task %d\n ", (unsigned long)pthread_self(), *(int *)arg);
     sleep(1);
@@ -262,9 +284,9 @@ void* process(void *arg)
 }
 
 int main() {
-    /*threadpool_t *threadpool_create(int min_thr_num, int max_thr_num, int queue_max_size);*/
+    /*threadpool_descriptor *threadpool_create(int min_thr_num, int max_thr_num, int queue_max_size);*/
 
-    threadpool_t *thp = create_threadpool(3, 100, 100);/*创建线程池，池里最小3个线程，最大100，队列最大100*/
+    threadpool_descriptor *thp = create_threadpool(3, 100, 100);/*创建线程池，池里最小3个线程，最大100，队列最大100*/
     printf("pool inited");
 
     //int *num = (int *)malloc(sizeof(int)*20);
@@ -272,10 +294,10 @@ int main() {
     for (i = 0; i < 20; i++) {
         num[i]=i;
         printf("add task %d\n",i);
-        threadpool_add(thp, process, (void*)&num[i]);     /* 向线程池中添加任务 */
+        threadpool_add_task(thp, test_process, (void *) &num[i]);     /* 向线程池中添加任务 */
     }
     sleep(10);                                          /* 等子线程完成任务 */
-    threadpool_destroy(thp);
+    destroy_threadpool(thp);
 
     return 0;
 }
