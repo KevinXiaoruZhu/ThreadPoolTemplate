@@ -1,3 +1,6 @@
+//
+// Created by Xiaoru_Zhu on 2020/3/20.
+//
 
 #include "threadpool.h"
 
@@ -287,16 +290,18 @@ int main() {
     /*threadpool_descriptor *threadpool_create(int min_thr_num, int max_thr_num, int queue_max_size);*/
 
     threadpool_descriptor *thp = create_threadpool(3, 100, 100);/*创建线程池，池里最小3个线程，最大100，队列最大100*/
-    printf("pool inited");
+    printf("Pool inited...");
 
-    //int *num = (int *)malloc(sizeof(int)*20);
+    // int* num = (int *)malloc(sizeof(int) * 20);
     int num[20], i;
     for (i = 0; i < 20; i++) {
         num[i]=i;
         printf("add task %d\n",i);
-        threadpool_add_task(thp, test_process, (void *) &num[i]);     /* 向线程池中添加任务 */
+        threadpool_add_task(thp, test_process, (void *) &num[i]);  /* add a task to the working queue */
     }
-    sleep(10);                                          /* 等子线程完成任务 */
+
+    sleep(10); /* wait for the threads */
+
     destroy_threadpool(thp);
 
     return 0;

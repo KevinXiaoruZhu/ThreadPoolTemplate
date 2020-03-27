@@ -14,11 +14,10 @@
 #include <csignal>
 #include <cerrno>
 
-//typedef struct threadpool_descriptor threadpool_descriptor;
 
 const int DEFAULT_TIME = 10; // check status of the pool every 10 seconds
-const int MIN_WAIT_TASK_NUM = 10; //
-const int DEFAULT_THREAD_CHANGE_STEP = 10;
+const int MIN_WAIT_TASK_NUM = 10;
+const int DEFAULT_THREAD_CHANGE_STEP = 10; // The # of threads that the managing thread add or reduce
 
 typedef struct {
     void* (*function) (void *);
@@ -63,11 +62,11 @@ threadpool_descriptor *threadpool_create(int min_thr_num, int max_thr_num, int q
 
 /**
  * @function threadpool_add_task
- * @desc add a new task in the queue of a thread pool
+ * @desc add a new task to the queue of the thread pool
  * @param pool     Thread pool to which add the task.
  * @param function Pointer to the function that will perform the task.
  * @param argument Argument to be passed to the function.
- * @return 0 if all goes well,else -1
+ * @return 0 if all goes well, else -1
  */
 int threadpool_add_task(threadpool_descriptor *pool, void*(*function)(void *arg), void *arg);
 
@@ -87,9 +86,9 @@ int destroy_threadpool(threadpool_descriptor *pool);
 int threadpool_all_threadnum(threadpool_descriptor *pool);
 
 /**
- * desc get the busy thread num
+ * @desc get the busy thread num
  * @param pool threadpool
- * return # of the busy thread
+ * @return # of the busy thread
  */
 int threadpool_busy_threadnum(threadpool_descriptor *pool);
 
@@ -97,8 +96,18 @@ int free_threadpool(threadpool_descriptor* pool);
 
 bool is_thread_alive(pthread_t tid);
 
+/**
+ * @desc thread function - working thread for handling the tasks from working queue
+ * @param pool threadpool
+ * @return null pointer
+ */
 void* working_thread(void* threadpool);
 
+/**
+ * @desc thread function - management thread for change the # of working threads dynamically
+ * @param pool threadpool
+ * @return null pointer
+ */
 void* managing_thread(void* threadpool);
 
 #endif //THREADPOOLTEMPLATE_THREADPOOL_H
