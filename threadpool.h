@@ -15,10 +15,11 @@
 #include <cerrno>
 
 
-const int DEFAULT_TIME = 10; // check status of the pool every 10 seconds
+const int DEFAULT_TIME = 10; // check the status of the pool every 10 seconds
 const int MIN_WAIT_TASK_NUM = 10;
 const int DEFAULT_THREAD_CHANGE_STEP = 10; // The # of threads that the managing thread add or reduce
 
+// actual task requested from clients
 typedef struct {
     void* (*function) (void *);
     void* arg;
@@ -31,9 +32,9 @@ typedef struct {
     pthread_cond_t queue_not_full;
     pthread_cond_t queue_not_empty;
 
-    pthread_t* threads;
+    pthread_t* threads; // array of working threads
     pthread_t adjust_tid;
-    threadpool_task_t* task_queue;
+    threadpool_task_t* task_queue; // array of actual tasks (circular queue)
 
     int min_thr_num;
     int max_thr_num;
@@ -41,10 +42,10 @@ typedef struct {
     int busy_thr_num;
     int wait_exit_thr_num;
 
-    int queue_front;
-    int queue_rear;
-    int queue_size;
-    int queue_max_size;
+    int queue_front; // front pointer
+    int queue_rear; // back pointer
+    int queue_size; // actaul size
+    int queue_max_size; // capacity
 
     bool shutdown;
 } threadpool_descriptor;
