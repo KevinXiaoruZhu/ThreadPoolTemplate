@@ -8,44 +8,49 @@ threadpool_descriptor* create_threadpool(int min_thr_num, int max_thr_num, int q
     int i;
     threadpool_descriptor* pool = nullptr;
 
-    if((pool = new threadpool_descriptor) == nullptr){
+    // 0. init 
+    if ((pool = new threadpool_descriptor) == nullptr) {
         std::cout << "Failed to create thread pool." << std::endl;
         free_threadpool(pool);
         return nullptr;
     }
     pool->max_thr_num = max_thr_num;
     pool->min_thr_num = min_thr_num;
-    pool->queue_max_size = queue_max_size;
-    pool->queue_size = 0;
-    pool->queue_front = 0;
-    pool->queue_rear = 0;
+    pool->queue_max_size = queue_max_size; // capacity of queue
+    pool->queue_size = 0; // current actual size in queue - how many active tasks need to be picked up by consumer
+    pool->queue_front = 0; // front pointer - FIFO, point to the first active task
+    pool->queue_rear = 0; // back pointer - point to the next available position in queue after executing threadpool_add_task()
     pool->shutdown = false;
     pool->live_thr_num = 0;
     pool->busy_thr_num = 0;
     pool->wait_exit_thr_num = 0;
 
-    if((pool->threads = new pthread_t[max_thr_num]) == nullptr){
+    // 1. create a working thread list to pick up tasks in pool (right now all values are NULL)
+    if ((pool->threads = new pthread_t[max_thr_num]) == nullptr) {
         std::cout << "Failed to malloc space for threads." << std::endl;
         free_threadpool(pool);
         return nullptr;
     }
 
-    if((pool->task_queue = new threadpool_task_t[queue_max_size]) == nullptr){
+    // 2. create the blocking queue for requested tasks
+    if ((pool->task_queue = new threadpool_task_t[queue_max_size]) == nullptr) {
         std::cout << "Failed to malloc space for task queue." << std::endl;
         free_threadpool(pool);
         return nullptr;
     }
 
-    if(!pthread_mutex_init(&pool->lock, nullptr)
+    // 3. init synchronization-related resources to ensure the thread-safe
+    if (!pthread_mutex_init(&pool->lock, nullptr)
         || !pthread_mutex_init(&pool->thread_counter, nullptr)
         || !pthread_cond_init(&pool->queue_not_full, nullptr)
-        || !pthread_cond_init(&pool->queue_not_empty, nullptr)){
+        || !pthread_cond_init(&pool->queue_not_empty, nullptr) ) {
         std::cout << "Failed to initialize locks or conds." << std::endl;
         free_threadpool(pool);
         return nullptr;
     }
 
-    for(i = 0; i < min_thr_num; ++i){
+    // 4. register working threads, each of which is endlessly running working_thread() as a consumer
+    for (i = 0; i < min_thr_num; ++i) {
         pthread_create(&(pool->threads[i]), nullptr, working_thread, (void *) pool);
         std::cout << "Starts running a new tread." << std::endl;
     }
@@ -57,7 +62,8 @@ threadpool_descriptor* create_threadpool(int min_thr_num, int max_thr_num, int q
 }
 
 // [CONSUMER] Basic task for every single thread in the pool
-void* working_thread(void* threadpool){
+// running in each thread in the pool
+void* working_thread(void* threadpool) {
     auto* pool = (threadpool_descriptor *)threadpool;
     threadpool_task_t task{};
 
@@ -227,7 +233,8 @@ bool is_thread_alive(pthread_t tid){
 }
 
 // [PRODUCER] Add a real task into the working queue from which the threads will get tasks
-int threadpool_add_task(threadpool_descriptor* pool, void* (*function)(void * arg), void* arg){
+// execute for each request
+int threadpool_add_task(threadpool_descriptor* pool, void* (*function)(void * arg), void* arg) {
 
     pthread_mutex_lock(&pool->lock);
 
