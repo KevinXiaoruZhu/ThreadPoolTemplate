@@ -56,29 +56,32 @@ threadpool_descriptor* create_threadpool(int min_thr_num, int max_thr_num, int q
 
 }
 
-// Basic task for every single thread in the pool
+// [CONSUMER] Basic task for every single thread in the pool
 void* working_thread(void* threadpool){
     auto* pool = (threadpool_descriptor *)threadpool;
     threadpool_task_t task{};
 
-    while(true){
+    // keep running until we shut down the thread pool
+    while (true) {
         pthread_mutex_lock(&pool->lock);
 
-        // If the queue size is 0, wait
-        while((pool->queue_size == 0) && (!pool->shutdown)){
+        // If the queue size is 0, which means there's no active task to handle, we should wait until new tasks enter
+        while ((pool->queue_size == 0) && (!pool->shutdown)) {
             std::cout << "Thread " << pthread_self() << " is waiting..." << std::endl;
 
             // Wait for the releasing signal of the conditional lock of the adding_task action
             // or the exit commands from the management thread
+            // 1. release the mutex lock
+            // 2. block and wait until another thread signal the pool->queue_not_empty
+            // 3. acquire the mutex lock again and exit pthread_cond_wait
             pthread_cond_wait(&pool->queue_not_empty, &pool->lock);
 
             // Current thread should exit when the exit waiting thread number > 0
-            if(pool->wait_exit_thr_num > 0){
+            if (pool->wait_exit_thr_num > 0) {
                 --pool->wait_exit_thr_num;
 
-                if(pool->live_thr_num > pool->min_thr_num){
-                    std::cout << "Thread " << pthread_self() << " is existing." << std::endl;
-
+                if (pool->live_thr_num > pool->min_thr_num) {
+                    std::cout << "Thread " << pthread_self() << " is exiting." << std::endl;
                     --pool->live_thr_num;
                     pthread_mutex_unlock(&pool->lock);
                     pthread_exit(nullptr);
@@ -87,7 +90,7 @@ void* working_thread(void* threadpool){
         }
 
         // Check if the thread pool will be shutdown
-        if(pool->shutdown){
+        if (pool->shutdown) {
             pthread_mutex_unlock(&pool->lock);
             std::cout << "Thread " << pthread_self() << " is existing." << std::endl;
             pthread_exit(nullptr);
@@ -98,7 +101,7 @@ void* working_thread(void* threadpool){
         task.function = pool->task_queue[pool->queue_front].function;
         task.arg = pool->task_queue[pool->queue_front].arg;
 
-        // Pop from current task queue
+        // Pop from the current task queue by moving the front pointer to the next position
         pool->queue_front = (pool->queue_front + 1) % pool->queue_max_size;
         --pool->queue_size;
 
@@ -223,7 +226,7 @@ bool is_thread_alive(pthread_t tid){
     return kill_rc != ESRCH;
 }
 
-// Add a real task into the working queue from which the threads will get tasks
+// [PRODUCER] Add a real task into the working queue from which the threads will get tasks
 int threadpool_add_task(threadpool_descriptor* pool, void* (*function)(void * arg), void* arg){
 
     pthread_mutex_lock(&pool->lock);
@@ -244,14 +247,14 @@ int threadpool_add_task(threadpool_descriptor* pool, void* (*function)(void * ar
 
     // Free up the target element of the task queue
     if(pool->task_queue[pool->queue_rear].arg != nullptr){
-        free(pool->task_queue[pool->queue_rear].arg);
+        free(pool->task_queue[pool->queue_rear].arg); // release the stale resources
         pool->task_queue[pool->queue_rear].arg = nullptr;
     }
 
     // Append the new task to the rear of the circular queue
     pool->task_queue[pool->queue_rear].function = function;
     pool->task_queue[pool->queue_rear].arg = arg;
-    pool->queue_rear = (pool->queue_rear + 1) % pool->queue_max_size;
+    pool->queue_rear = (pool->queue_rear + 1) % pool->queue_max_size; // move to the next available position
     ++pool->queue_size;
 
     // Release the locks
