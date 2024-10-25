@@ -229,9 +229,13 @@ int threadpool_add_task(threadpool_descriptor* pool, void* (*function)(void * ar
     pthread_mutex_lock(&pool->lock);
 
     // Wait for the signal of the queue_not_full if the queue size reaches the max
-    while((pool->queue_size == pool->queue_max_size) && (!pool->shutdown)){
+    while((pool->queue_size == pool->queue_max_size) && (!pool->shutdown)) {
+        // when the queue is full we are doing the following conditional wait:
+        // 1. release the mutex pool->lock
+        // 2. block and wait until pool->queue_not_full gets signaled by another thread
+        // 3. acquire the mutex pool->lock again, and exit the pthread_cond_wait().
         pthread_cond_wait(&pool->queue_not_full, &pool->lock);
-    }
+    } // after quitting the loop, the current thread must hold the mutex lock
 
     // Check if the thread pool is going to be shutdown
     if(pool->shutdown){
